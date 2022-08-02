@@ -76,12 +76,12 @@ def _get_homedirs():
     Returns:
         list of HomeDir
     """
-    homedirs = []
     users_dir_path = pathjoin(ROOT_PATH, 'Users')
-    for user_name in listdir(users_dir_path):
-        if not user_name.startswith('.'):
-            homedirs.append(HomeDir(user_name, pathjoin(ROOT_PATH, 'Users', user_name)))
-    return homedirs
+    return [
+        HomeDir(user_name, pathjoin(ROOT_PATH, 'Users', user_name))
+        for user_name in listdir(users_dir_path)
+        if not user_name.startswith('.')
+    ]
 
 
 def listdir(dir_path):
@@ -109,9 +109,7 @@ def _relative_path(path):
     Returns:
         string
     """
-    if path.startswith('/'):
-        return path[1:]
-    return path
+    return path[1:] if path.startswith('/') else path
 
 
 def pathjoin(path, *args):
@@ -171,9 +169,7 @@ def _timestamp_errorhandling(func):
         try:
             dt = func(*args, **kwargs)
             tomorrow = datetime.now() + timedelta(days=1)  # just in case of some timezone issues
-            if dt.year < MIN_YEAR or dt > tomorrow:
-                return None
-            return dt
+            return None if dt.year < MIN_YEAR or dt > tomorrow else dt
         except Exception:
             return None
 
@@ -265,19 +261,18 @@ def _get_extended_attr(file_path, attr):
     """
     try:
         xattr_val = getxattr(file_path, attr)
-        if xattr_val.startswith('bplist'):
-            try:
-                plist_array, _, plist_error = Foundation.NSPropertyListSerialization.propertyListWithData_options_format_error_(
-                    buffer(xattr_val), 0, None, None,
-                )
-                if plist_error:
-                    Logger.log_error(message='plist de-serialization error: {0}'.format(plist_error))
-                    return None
-                return list(plist_array)
-            except Exception as deserialize_plist_e:
-                Logger.log_exception(deserialize_plist_e, message='_get_extended_attr failed on {0} for {1}'.format(file_path, attr))
-        else:
+        if not xattr_val.startswith('bplist'):
             return [xattr_val]
+        try:
+            plist_array, _, plist_error = Foundation.NSPropertyListSerialization.propertyListWithData_options_format_error_(
+                buffer(xattr_val), 0, None, None,
+            )
+            if plist_error:
+                Logger.log_error(message='plist de-serialization error: {0}'.format(plist_error))
+                return None
+            return list(plist_array)
+        except Exception as deserialize_plist_e:
+            Logger.log_exception(deserialize_plist_e, message='_get_extended_attr failed on {0} for {1}'.format(file_path, attr))
     except KeyError:
         pass  # ignore missing key in xattr
     except IOError:
@@ -331,12 +326,10 @@ def _get_file_info(file_path, log_xattr=False):
         }
 
         if log_xattr:
-            where_from = _get_where_froms(file_path)
-            if where_from:
+            if where_from := _get_where_froms(file_path):
                 file_info['xattr-wherefrom'] = where_from
 
-            quarantines = _get_quarantines(file_path)
-            if quarantines:
+            if quarantines := _get_quarantines(file_path):
                 file_info['xattr-quarantines'] = quarantines
 
         return file_info
@@ -356,7 +349,9 @@ def _normalize_val(val, key=None):
     :returns: A string
     """
     # If the key hints this is a timestamp, try to use some popular formats
-    if key and any([hint in key.lower() for hint in ['time', 'utc', 'date', 'accessed']]):
+    if key and any(
+        hint in key.lower() for hint in ['time', 'utc', 'date', 'accessed']
+    ):
         ts = _value_to_datetime(val)
         # Known timestamp keys with values not conforming to heuristics are mapped to a default timestamp
         if not ts and key in ['last_access_time', 'expires_utc', 'date_created', 'end_time']:
@@ -387,7 +382,7 @@ def _normalize_val(val, key=None):
             return '<NSData bytes:{0}>'.format(val.length())
         elif isinstance(val, Foundation.NSArray):
             return [_normalize_val(stuff) for stuff in val]
-        elif isinstance(val, Foundation.NSDictionary) or isinstance(val, dict):
+        elif isinstance(val, (Foundation.NSDictionary, dict)):
             return dict([(k, _normalize_val(val.get(k), k)) for k in val.keys()])
         elif isinstance(val, Foundation.NSDate):
             # NSDate could have special case handling
@@ -633,10 +628,7 @@ class Collector(object):
 
         fde_status = os.popen('fdesetup status').read()
 
-        if 'On' in fde_status:
-            return True
-        else:
-            return False
+        return 'On' in fde_status
 
     def _foreach_homedir(func):
         """A decorator to ensure a method is called for each user's homedir.
@@ -680,7 +672,7 @@ class Collector(object):
                 error_description = _decode_error_description(error)
                 Logger.log_error('Unable to read plist: [{0}]. plist_path[{1}]'.format(error_description, plist_path))
                 return default
-            if 0 == plist_nsdata.length():
+            if plist_nsdata.length() == 0:
                 Logger.log_warning('Empty plist. plist_path[{0}]'.format(plist_path))
                 return default
 
@@ -798,8 +790,7 @@ class Collector(object):
             cfbundle_executable_path = 'MacOS' if sub_dir_path.endswith('Contents') else ''
             plist_path = pathjoin(sub_dir_path, plist_file)
             plist = self._read_plist(plist_path)
-            cfbundle_executable = plist.get('CFBundleExecutable')
-            if cfbundle_executable:
+            if cfbundle_executable := plist.get('CFBundleExecutable'):
                 file_path = pathjoin(sub_dir_path, cfbundle_executable_path, cfbundle_executable)
                 file_info = _get_file_info(file_path)
                 file_info['osxcollector_plist_path'] = plist_path
@@ -1070,7 +1061,10 @@ class Collector(object):
                 self._raw_log_sqlite_db(sqlite_db_path, ignore)
 
             except Exception as connection_e:
-                if isinstance(connection_e, OperationalError) and -1 != connection_e.message.find('locked'):
+                if (
+                    isinstance(connection_e, OperationalError)
+                    and connection_e.message.find('locked') != -1
+                ):
                     shutil.copyfile(sqlite_db_path, '{0}.tmp'.format(sqlite_db_path))
                     self._raw_log_sqlite_db('{0}.tmp'.format(sqlite_db_path), ignore)
                     os.remove('{0}.tmp'.format(sqlite_db_path))
@@ -1286,17 +1280,21 @@ class Collector(object):
             if user_name[0].startswith('.'):
                 continue
 
-            user_details = {}
-
             sys_user_plist_path = pathjoin(ROOT_PATH, 'private/var/db/dslocal/nodes/Default/users', user_name)
             sys_user_plist = self._read_plist(sys_user_plist_path)
 
-            user_details['names'] = [{'name': val, 'is_admin': (val in self.admins)} for val in sys_user_plist.get('name', [])]
-            user_details['realname'] = [val for val in sys_user_plist.get('realname', [])]
-            user_details['shell'] = [val for val in sys_user_plist.get('shell', [])]
-            user_details['home'] = [val for val in sys_user_plist.get('home', [])]
-            user_details['uid'] = [val for val in sys_user_plist.get('uid', [])]
-            user_details['gid'] = [val for val in sys_user_plist.get('gid', [])]
+            user_details = {
+                'names': [
+                    {'name': val, 'is_admin': (val in self.admins)}
+                    for val in sys_user_plist.get('name', [])
+                ]
+            }
+
+            user_details['realname'] = list(sys_user_plist.get('realname', []))
+            user_details['shell'] = list(sys_user_plist.get('shell', []))
+            user_details['home'] = list(sys_user_plist.get('home', []))
+            user_details['uid'] = list(sys_user_plist.get('uid', []))
+            user_details['gid'] = list(sys_user_plist.get('gid', []))
             user_details['generateduid'] = []
             for val in sys_user_plist.get('generateduid', []):
                 user_details['generateduid'].append({'name': val, 'is_admin': (val in self.admins)})
@@ -1449,10 +1447,7 @@ class kyphosis():
             # Fat file
             self.make_soap()
 
-        if self.extra_data_found is True:
-            return True
-        else:
-            return False
+        return self.extra_data_found is True
 
     def make_soap(self):
         # process Fat file
@@ -1493,8 +1488,7 @@ class kyphosis():
                     h.write(self.empty_space)
 
     def fat_header(self):
-        header = {}
-        header['CPU Type'] = struct.unpack('>I', self.bin.read(4))[0]
+        header = {'CPU Type': struct.unpack('>I', self.bin.read(4))[0]}
         header['CPU SubType'] = struct.unpack('>I', self.bin.read(4))[0]
         header['Offset'] = struct.unpack('>I', self.bin.read(4))[0]
         header['Size'] = struct.unpack('>I', self.bin.read(4))[0]
@@ -1555,15 +1549,16 @@ def main():
     global firefox_ignored_sqlite_keys
     global safari_ignored_sqlite_keys
     global chrome_ignored_sqlite_keys
-    firefox_ignored_sqlite_keys = {}
-    safari_ignored_sqlite_keys = {}
     chrome_ignored_sqlite_keys = {}
 
     euid = os.geteuid()
     egid = os.getegid()
 
     parser = ArgumentParser()
-    parser.add_argument('-v', '--version', action='version', version='%(prog)s ' + __version__)
+    parser.add_argument(
+        '-v', '--version', action='version', version=f'%(prog)s {__version__}'
+    )
+
     parser.add_argument(
         '-i', '--id', dest='incident_prefix', default='osxcollect',
         help='[OPTIONAL] An identifier which will be added as a prefix to the '
@@ -1606,12 +1601,12 @@ def main():
 
     # Ignore cookies value
     if not args.collect_cookies_value:
-        firefox_ignored_sqlite_keys['cookies'] = {'moz_cookies': ['value']}
+        firefox_ignored_sqlite_keys = {'cookies': {'moz_cookies': ['value']}}
         chrome_ignored_sqlite_keys['cookies'] = {'cookies': ['value']}
 
     # Ignore local storage value
     if not args.collect_local_storage_value:
-        safari_ignored_sqlite_keys['localstorage'] = {'ItemTable': ['value']}
+        safari_ignored_sqlite_keys = {'localstorage': {'ItemTable': ['value']}}
         chrome_ignored_sqlite_keys['local_storage'] = {'ItemTable': ['value']}
 
     # Create an incident ID

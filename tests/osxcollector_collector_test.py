@@ -48,7 +48,7 @@ class TestCollector:
 
     def _really_expected_file_info(self, expected):
         really_expected = {}
-        really_expected.update(expected)
+        really_expected |= expected
         really_expected.update(self.expected_file_info)
         return really_expected
 

@@ -10,7 +10,7 @@ with open('osxcollector/osxcollector.py', 'r') as f:
     # This is done to avoid loading the entire module which may cause import errors
     version_regex = re.compile(r'__version__\s*=\s*[\'"]([0-9\.]+)[\'"]')
     version_line = next(l for l in f if version_regex.search(l))
-    __version__ = version_regex.search(version_line).group(1)
+    __version__ = version_regex.search(version_line)[1]
 
 setup(
     name='osxcollector',
